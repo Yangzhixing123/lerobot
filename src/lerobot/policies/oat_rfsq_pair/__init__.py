@@ -1,0 +1,1 @@
+from .configuration_oat_rfsq_pair import OATRFSQPairConfig as OATRFSQPairConfig
