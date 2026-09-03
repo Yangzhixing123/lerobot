@@ -9,7 +9,7 @@ from pathlib import Path
 
 import torch
 from safetensors.torch import save_model
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 
 from lerobot.configs import parser
 from lerobot.configs.types import FeatureType, PolicyFeature
@@ -20,6 +20,47 @@ from lerobot.utils.constants import ACTION
 from lerobot.utils.utils import init_logging
 
 logger = logging.getLogger(__name__)
+
+
+class _ActionWindowDataset(Dataset):
+    """Serve episode-aware action windows without decoding visual observations."""
+
+    def __init__(self, dataset, horizon: int) -> None:
+        if horizon < 1:
+            raise ValueError("horizon must be positive.")
+
+        action_column = dataset.select_columns(ACTION)[ACTION]
+        self.actions = torch.stack(list(action_column)).contiguous()
+        self.horizon = horizon
+
+        # Store each frame's exclusive episode end so windows can repeat the final
+        # action instead of crossing into the next episode. This matches the padding
+        # behavior of LeRobotDataset delta timestamps.
+        self.episode_end_indices = torch.full((len(self.actions),), -1, dtype=torch.long)
+        for episode in dataset.meta.episodes:
+            start = int(episode["dataset_from_index"])
+            end = int(episode["dataset_to_index"])
+            if not 0 <= start < end <= len(self.actions):
+                raise ValueError(
+                    f"Invalid episode bounds [{start}, {end}) for an action table with "
+                    f"{len(self.actions)} frames."
+                )
+            self.episode_end_indices[start:end] = end
+
+        if (self.episode_end_indices < 0).any():
+            raise ValueError("Episode metadata does not cover every action frame.")
+
+    def __len__(self) -> int:
+        return len(self.actions)
+
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
+        episode_end = int(self.episode_end_indices[index])
+        window_end = min(index + self.horizon, episode_end)
+        actions = self.actions[index:window_end]
+        if len(actions) < self.horizon:
+            padding = actions[-1:].expand(self.horizon - len(actions), -1)
+            actions = torch.cat((actions, padding), dim=0)
+        return {ACTION: actions}
 
 
 @dataclass
@@ -82,8 +123,10 @@ def train_oat_tokenizer(cfg: OATTokenizerTrainingConfig) -> None:
     if ACTION not in meta.features:
         raise ValueError(f"Dataset {cfg.repo_id!r} has no {ACTION!r} feature.")
     action_dim = meta.features[ACTION]["shape"][0]
-    delta_timestamps = {ACTION: [index / meta.fps for index in range(cfg.horizon)]}
-    dataset = LeRobotDataset(cfg.repo_id, root=cfg.root, delta_timestamps=delta_timestamps)
+    # The tokenizer only consumes action chunks. Avoid LeRobotDataset.__getitem__,
+    # which would otherwise decode every visual observation even though it is unused.
+    source_dataset = LeRobotDataset(cfg.repo_id, root=cfg.root, download_videos=False)
+    dataset = _ActionWindowDataset(source_dataset, cfg.horizon)
     if not meta.stats or ACTION not in meta.stats:
         raise ValueError("OAT tokenizer training requires action min/max statistics in the dataset metadata.")
     action_stats = meta.stats[ACTION]
