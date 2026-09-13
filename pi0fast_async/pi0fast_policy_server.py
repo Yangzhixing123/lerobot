@@ -6,8 +6,6 @@ upstream async gRPC protocol, but adds the PEFT loading path needed by
 ``yangzhixing/pi0fast-base-lora-so101-box-to-plate``.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import pickle  # nosec

@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 """Windows-side SO101 client for the PI0-Fast async policy server."""
 
-from __future__ import annotations
-
 import json
 import logging
 import threading
