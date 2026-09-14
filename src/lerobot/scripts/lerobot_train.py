@@ -368,6 +368,11 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
                 "norm_map": policy.config.normalization_mapping,
             },
         }
+        action_tokenizer_name = getattr(active_cfg, "action_tokenizer_name", None)
+        if action_tokenizer_name is not None:
+            preprocessor_overrides["action_tokenizer_processor"] = {
+                "action_tokenizer_name": action_tokenizer_name,
+            }        
         # On resume, the checkpoint's saved processor stats are authoritative: they may have
         # been adapted by the policy (e.g. EVO1 pads state/action stats to max_state_dim),
         # and force-feeding raw dataset stats over them crashes normalization (#4006).
